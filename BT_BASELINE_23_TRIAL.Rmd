@@ -1,0 +1,554 @@
+---
+title: "BT Baseline trials"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# DISCLAIMER
+
+This code was made by Carlos Rafael Gonzalez Soffner for the Final Thesis 
+presented to the Bachelor of Data and Business Analytics. Anyone is welcomed to
+use this file or any part of it for their projects as long as they reference
+this thesis, code or author.
+
+Bests,
+
+Carlos.
+
+
+# LIBRARIES
+
+The main libraries needed for modelling are readxl,BradleyTerry2 and dplyr.
+Given that it is a classification task, it is likely that other libraries like 
+pROC or ggplot2 might come at hand. Indeed, they were used in the initial
+stages of the thesis to familiarise with the predictions, so they were left here
+for future use.
+
+```{r cars}
+library(readxl)
+library(BradleyTerry2)
+library(openxlsx)
+library(dplyr)
+library(pROC)
+library(caret)
+library(tidyverse)
+library(ggplot2)
+```
+
+# DATA
+
+This chunk is used to read data and prepare the modelling. It includes:
+
+  - list_STBT (list): list with training datasets.
+  - list_ST_TEST (list): list with test datasets.
+  - teams (vector): contains the teams in the datasets.
+  - reference_wX (vector): contains the reference team for a window of X 
+  seasons.
+
+
+```{r}
+list_STBT <- list(
+  AFL2015 = read.xlsx("E:/TFG DATA/ST_DATA/AFL_ST_2015.xlsx"),
+  AFL2016 = read.xlsx("E:/TFG DATA/ST_DATA/AFL_ST_2016.xlsx"),
+  AFL2017 = read.xlsx("E:/TFG DATA/ST_DATA/AFL_ST_2017.xlsx"),
+  AFL2018 = read.xlsx("E:/TFG DATA/ST_DATA/AFL_ST_2018.xlsx"),
+  AFL2019 = read.xlsx("E:/TFG DATA/ST_DATA/AFL_ST_2019.xlsx"),
+  AFL2020 = read.xlsx("E:/TFG DATA/ST_DATA/AFL_ST_2020.xlsx"),
+  AFL2021 = read.xlsx("E:/TFG DATA/ST_DATA/AFL_ST_2021.xlsx"),
+  AFL2022 = read.xlsx("E:/TFG DATA/ST_DATA/AFL_ST_2022.xlsx"),
+  AFL2023 = read.xlsx("E:/TFG DATA/ST_DATA/AFL_ST_2023.xlsx"),
+  AFLFULL = read.xlsx("E:/TFG DATA/ST_DATA/AFL_ST_2024.xlsx")
+)
+list_ST_TEST <- list(
+  AFL2015_TEST = read.xlsx("E:/TFG DATA/ST_DATA_TEST/AFL_ST_2015_TEST.xlsx"),
+  AFL2016_TEST = read.xlsx("E:/TFG DATA/ST_DATA_TEST/AFL_ST_2016_TEST.xlsx"),
+  AFL2017_TEST = read.xlsx("E:/TFG DATA/ST_DATA_TEST/AFL_ST_2017_TEST.xlsx"),
+  AFL2018_TEST = read.xlsx("E:/TFG DATA/ST_DATA_TEST/AFL_ST_2018_TEST.xlsx"),
+  AFL2019_TEST = read.xlsx("E:/TFG DATA/ST_DATA_TEST/AFL_ST_2019_TEST.xlsx"),
+  AFL2020_TEST = read.xlsx("E:/TFG DATA/ST_DATA_TEST/AFL_ST_2020_TEST.xlsx"),
+  AFL2021_TEST = read.xlsx("E:/TFG DATA/ST_DATA_TEST/AFL_ST_2021_TEST.xlsx"),
+  AFL2022_TEST = read.xlsx("E:/TFG DATA/ST_DATA_TEST/AFL_ST_2022_TEST.xlsx"),
+  AFL2023_TEST = read.xlsx("E:/TFG DATA/ST_DATA_TEST/AFL_ST_2023_TEST.xlsx"),
+  AFLFULL_TEST = read.xlsx("E:/TFG DATA/ST_DATA_TEST/AFL_ST_2024_TEST.xlsx")
+)
+
+teams <- c("teamADEL", "teamBL", "teamCARL", "teamCOLL", "teamESS", "teamFRE",
+           "teamGCFC", "teamGEEL", "teamGWS", "teamHAW", "teamMELB", "teamNMFC",
+           "teamPORT", "teamRICH", "teamSTK", "teamSYD", "teamWB", "teamWCE",
+           "AT_HOME")  
+
+reference_w1 <- c("GEEL", "PORT", "WB",
+               "PORT", "PORT","GWS",
+               "STK","STK","ADEL",
+               "ADEL")
+reference_w2 <- c("FRE", "STK", "HAW",
+               "SYD", "ESS","SYD",
+               "STK","STK","ADEL",
+               "ADEL")
+reference_w3 <- c("NMFC", "PORT", "HAW",
+               "ESS", "STK","STK",
+               "STK","ADEL","ADEL",
+               "ADEL")
+reference_w4 <- c("NMFC", "PORT", "ESS",
+               "SYD", "GWS","FRE",
+               "ADEL","ADEL","ADEL",
+               "ADEL")
+
+```
+
+# FITTING STANDARD BT EXPANSIONS
+
+The function fit_BTM_models is used to fit standard BT expansions to the
+training datasets.
+
+Parameters:
+  - datasets (list): list with training datasets
+  - teams (vector): contains the teams in the datasets.
+  - ventana (numeric): size of the window to train the models
+  - reference (vector): contains the reference team for a window of X 
+  seasons.
+
+Details:
+  - Iterates over each dataset in the list and takes the correspondent reference
+ team.
+ - If the window is higher than 1 season, it takes the appropriate number of
+ datasets, binds and formats them for modelling.
+ - Sets the HOME_TEAM and AWAY_TEAM columns as factors and the HOME_WIN and 
+ AWAY_WIN as numeric to avoid raising an Error.
+ - Fits a BT model with BTm().
+ - Iteratively builds two datasets: one with the season and AIC, and another
+ with the estimated strength coefficients for each team. Contest-specific
+ effects can be included but they will simply not be estimated and their rows
+ will be left empty.
+ 
+Returns:
+  - list_models (list): list with fitted models so they are easier to access 
+  when predicting
+  - AIC_dataframe (data.frame): dataframe with the fitted models and their AIC.
+  - standard_abilities (data.frame): dataframe with the estimated strengths for
+  each season.
+
+```{r}
+
+fit_BTM_models <- function(datasets, teams, ventana, reference) {
+  list_models <- list()
+  # print('Creating dataframes')
+  AIC_dataframe <- data.frame(
+  model = character(),
+  AIC = numeric(),
+  predict_same = numeric(),
+  predict_next = numeric(),
+  stringsAsFactors = FALSE
+  )
+  
+  standard_abilities <- data.frame(
+    team = teams,
+    stringsAsFactors = FALSE
+  )
+  reff = 0
+  # print('Fitting models')
+  # Fit model
+  for (dataset_name in names(datasets)) {
+    print(dataset_name)
+    data_AFL <- datasets[[dataset_name]] 
+    reff = reff + 1
+    ########################
+    #CHANGE: ventana effects
+    ########################
+    n_datasets <- min(ventana, length(datasets) - which(names(datasets) == dataset_name) + 1)
+    if (n_datasets > 1) {
+      for (i in 2:n_datasets) {
+        next_dataset_name <- names(datasets)[which(names(datasets) == dataset_name) + (i - 1)]
+        data_AFL <- rbind(data_AFL, datasets[[next_dataset_name]])
+      }
+      
+      bound_datasets <- names(datasets)[
+        which(names(datasets) %in% names(datasets)[which(
+          names(datasets) == dataset_name):(
+            which(names(datasets) == dataset_name) + n_datasets - 1)])]
+      bound_datasets_string <- paste(bound_datasets, collapse = ", ")
+      print(paste("Datasets binded:", bound_datasets_string))
+      
+      data_AFL <- data_AFL %>%
+        group_by(HOME_TEAM, AWAY_TEAM) %>%
+        summarise(
+          HOME_WIN = sum(HOME_WIN),
+          AWAY_WIN = sum(AWAY_WIN)) %>%
+        ungroup()
+    }  
+    
+    data_AFL$HOME_TEAM <- as.factor(data_AFL$HOME_TEAM)
+    data_AFL$AWAY_TEAM <- as.factor(data_AFL$AWAY_TEAM)
+    data_AFL$HOME_WIN <- as.numeric(as.character(data_AFL$HOME_WIN))
+    data_AFL$AWAY_WIN <- as.numeric(as.character(data_AFL$AWAY_WIN))
+    
+    # print('Fitting ST')
+    # print(reference[reff])
+    standardBT <- BTm(cbind(HOME_WIN, AWAY_WIN), HOME_TEAM, AWAY_TEAM, 
+                  data = data_AFL, id = "team", refcat = reference[reff]
+                  )
+    
+    # print('summaryST')
+    list_models[[dataset_name]] <- standardBT
+    
+    summary <- summary(standardBT)
+    print(class(summary))
+    AICC <- summary$aic
+    # print(AICC)
+    AIC_dataframe <- rbind(AIC_dataframe, data.frame(
+      model = paste(dataset_name, "_model", sep = ""),
+      AIC = AICC,
+      predict_same = NA,
+      predict_next = NA
+    ))
+    
+    coef_names <- rownames(summary$coefficients)
+    coef_values <- summary$coefficients[, 1]
+    coef_pvalues <- summary$coefficients[, 4]
+    standard_abilities[[paste("ability_", dataset_name, 
+                              sep = "")]] <- numeric(nrow(standard_abilities))
+    standard_abilities[[paste("pvalue_", dataset_name, 
+                              sep = "")]] <- numeric(nrow(standard_abilities))
+    for (i in seq_along(coef_names)) {
+      coef_name <- coef_names[i]
+      coef_value <- coef_values[i]
+      coef_pvalue <- coef_pvalues[i]
+      if (coef_name %in% teams) {
+        standard_abilities[standard_abilities$team == coef_name, 
+                           paste("ability_", dataset_name, sep = "")] <- coef_value
+        standard_abilities[standard_abilities$team == coef_name, 
+                           paste("pvalue_", dataset_name, sep = "")] <- coef_pvalue
+      }
+    }
+  }
+  
+  result <- list(
+    list_models = list_models,
+    AIC_dataframe = AIC_dataframe,
+    standard_abilities = standard_abilities
+  )
+  return(result)
+  
+}
+```
+
+
+```{r}
+resu <- fit_BTM_models(list_STBT, teams, 4, reference_w4)
+resu
+```
+
+```{r}
+write.xlsx(resu$AIC_dataframe, file = "E:/TFG DATA/RESULTS/AIC_PREDS_ST_w4.xlsx", 
+           row.names = FALSE)
+write.xlsx(resu$standard_abilities, file = "E:/TFG DATA/RESULTS/COEFS_ST_w4.xlsx", 
+           row.names = FALSE)
+```
+
+# PREDICTING WITH STANDARD BT EXPANSIONS
+
+The function d_binder_test is used to bind two or more test datasets to test
+the model on a window of more than one season.
+
+predict_same_next_ST is used to make predictions with the previously fitted
+models.
+
+Parameters:
+  - model_ST (model): Bradley-Terry model.
+  - same_data (data.frame): training data.
+  - next_data (data.frame): test data.
+
+Details:
+  - Predictions are done at the 'response' level. It predicts the probability
+  between 0 and 1 of the HOME_TEAM winning. The HOME_TEAM is predicted to win
+  if the probability is > 0.5.
+ 
+Returns:
+  - accuracy_now (numeric): classification accuracy over train set
+  - accuracy_next (numeric): classification accuracy over test set
+  - conf_matrix_now: confusion matrix for the predictions over the train set.
+  - conf_matrix_next: confusion matrix for the predictions over the test set.
+
+
+```{r}
+d_binder_test <- function(data_list){
+  data_AFL <- do.call(rbind, data_list)
+  
+  #data_AFL <- data_AFL %>%
+  #group_by(HOME_TEAM, AWAY_TEAM) %>%
+  #summarise(
+  #  HOME_WIN = sum(HOME_WIN),
+  #  AWAY_WIN = sum(AWAY_WIN)) %>%
+  #ungroup()
+
+  data_AFL$HOME_TEAM <- as.factor(data_AFL$HOME_TEAM)
+  data_AFL$AWAY_TEAM <- as.factor(data_AFL$AWAY_TEAM)
+  data_AFL$HOME_WIN <- as.numeric(as.character(data_AFL$HOME_WIN))
+  data_AFL$AWAY_WIN <- as.numeric(as.character(data_AFL$AWAY_WIN))
+  
+  return(data_AFL)
+  
+}
+
+
+predict_same_next_ST <- function(model_ST, same_data,next_data) {
+  
+  same_data$HOME_TEAM <- as.factor(same_data$HOME_TEAM)
+  same_data$AWAY_TEAM <- as.factor(same_data$AWAY_TEAM)
+  same_data$HOME_WIN <- as.numeric(as.character(same_data$HOME_WIN))
+  same_data$AWAY_WIN <- as.numeric(as.character(same_data$AWAY_WIN))
+  next_data$HOME_TEAM <- as.factor(next_data$HOME_TEAM)
+  next_data$AWAY_TEAM <- as.factor(next_data$AWAY_TEAM)
+  next_data$HOME_WIN <- as.numeric(as.character(next_data$HOME_WIN))
+  next_data$AWAY_WIN <- as.numeric(as.character(next_data$AWAY_WIN))
+  
+  
+  pred_now_p <- predict(model_ST, se.fit = TRUE, level = 0, 
+                      type = "response", newdata = same_data)$fit
+  pred_now_b <- ifelse(pred_now_p > 0.5, 1, 0)
+  pred_next_p <- predict(model_ST, se.fit = TRUE, level = 0, 
+                      type = "response", newdata = next_data)$fit
+  pred_next_b <- ifelse(pred_next_p > 0.5, 1, 0)
+  
+  accuracy_now <- mean(pred_now_b == same_data$HOME_WIN)
+  accuracy_next <- mean(pred_next_b == next_data$HOME_WIN)
+  conf_matrix_now <- confusionMatrix(data = factor(pred_now_b,levels = c(0, 1)), 
+                               reference = factor(same_data$HOME_WIN,levels = c(0, 1)),
+                               positive = '1')
+  conf_matrix_next <- confusionMatrix(data = factor(pred_next_b,levels = c(0, 1)), 
+                             reference = factor(next_data$HOME_WIN,levels = c(0, 1)),
+                             positive = '1')
+  
+  result <- list(
+    accuracy_now = accuracy_now,
+    accuracy_next = accuracy_next,
+    conf_matrix_now = conf_matrix_now,
+    conf_matrix_next = conf_matrix_next
+  )
+  return(result)
+  
+}
+```
+
+
+```{r}
+
+bindi<-d_binder_test(list(list_ST_TEST$AFL2023_TEST,
+                          list_ST_TEST$AFL2020_TEST,
+                          list_ST_TEST$AFL2021_TEST,
+                         list_ST_TEST$AFL2022_TEST))
+
+preds_ST<-predict_same_next_ST(resu$list_models$AFL2020,
+                               bindi,
+                               list_ST_TEST$AFL2023_TEST)
+preds_ST$conf_matrix_now
+preds_ST$conf_matrix_next
+```
+
+# FITTING CONTEST-SPECIFIC BT EXPANSIONS
+
+The function fit_BTM_CS is used to fit contest-specufic BT expansions to the
+training datasets. It works just like fit_BTM_models, with the difference being
+the reprocessing of the HOME_TEAM and AWAY_TEAM variables as dataframes with
+the columns 'team' and AT_HOME (1 for HOME_TEAM, 0 for AWAY_TEAM).
+
+
+```{r}
+fit_BTM_CS <- function(datasets, teams, ventana, reference) {
+  list_models <- list()
+  # print('Creating dataframes')
+  AIC_dataframe <- data.frame(
+  model = character(),
+  AIC = numeric(),
+  predict_same = numeric(),
+  predict_next = numeric(),
+  stringsAsFactors = FALSE
+  )
+  
+  standard_abilities <- data.frame(
+    team = teams,
+    stringsAsFactors = FALSE
+  )
+  reff = 0
+  # print('Fitting models')
+  # Fit model
+  for (dataset_name in names(datasets)) {
+    reff = reff + 1
+    print(dataset_name)
+    data_AFL <- datasets[[dataset_name]] 
+    ########################
+    #CHANGE: ventana effects
+    ########################
+    n_datasets <- min(ventana, length(datasets) - which(names(datasets) == dataset_name) + 1)
+    if (n_datasets > 1) {
+      for (i in 2:n_datasets) {
+        next_dataset_name <- names(datasets)[which(names(datasets) == dataset_name) + (i - 1)]
+        data_AFL <- rbind(data_AFL, datasets[[next_dataset_name]])
+      }
+      bound_datasets <- names(datasets)[
+        which(names(datasets) %in% names(datasets)[which(
+          names(datasets) == dataset_name):(
+            which(names(datasets) == dataset_name) + n_datasets - 1)])]
+      bound_datasets_string <- paste(bound_datasets, collapse = ", ")
+      print(paste("Datasets binded:", bound_datasets_string))
+      data_AFL <- data_AFL %>%
+        group_by(HOME_TEAM, AWAY_TEAM) %>%
+        summarise(
+          HOME_WIN = sum(HOME_WIN),
+          AWAY_WIN = sum(AWAY_WIN)) %>%
+        ungroup()
+    }
+    
+    data_AFL$HOME_TEAM <- as.factor(data_AFL$HOME_TEAM)
+    data_AFL$AWAY_TEAM <- as.factor(data_AFL$AWAY_TEAM)
+    data_AFL$HOME_WIN <- as.numeric(as.character(data_AFL$HOME_WIN))
+    data_AFL$AWAY_WIN <- as.numeric(as.character(data_AFL$AWAY_WIN))
+    data_AFL$HOME_TEAM <- data.frame(team = data_AFL$HOME_TEAM,
+                                     AT_HOME = 1)
+    data_AFL$AWAY_TEAM <- data.frame(team = data_AFL$AWAY_TEAM
+                                      , AT_HOME = 0)
+    
+    # print('Fitting ST-CS')
+    standardBT_HOME<- BTm(outcome = cbind(HOME_WIN, AWAY_WIN), 
+                          player1 = HOME_TEAM, player2 = AWAY_TEAM, 
+                          formula = ~team + AT_HOME, id = "team",
+                           refcat = reference[reff],
+                      data = data_AFL)
+    
+    # print('summaryST')
+    list_models[[dataset_name]] <- standardBT_HOME
+    
+    summary <- summary(standardBT_HOME)
+    # print(summary)
+    AICC <- summary$aic
+    # print(AICC)
+    AIC_dataframe <- rbind(AIC_dataframe, data.frame(
+      model = paste(dataset_name, "_model", sep = ""),
+      AIC = AICC,
+      predict_same = NA,
+      predict_next = NA
+    ))
+    
+    coef_names <- rownames(summary$coefficients)
+    coef_values <- summary$coefficients[, 1]
+    coef_pvalues <- summary$coefficients[, 4]
+    standard_abilities[[paste("ability_", dataset_name, 
+                              sep = "")]] <- numeric(nrow(standard_abilities))
+    standard_abilities[[paste("pvalue_", dataset_name, 
+                              sep = "")]] <- numeric(nrow(standard_abilities))
+    for (i in seq_along(coef_names)) {
+      coef_name <- coef_names[i]
+      coef_value <- coef_values[i]
+      coef_pvalue <- coef_pvalues[i]
+      if (coef_name %in% teams) {
+        standard_abilities[standard_abilities$team == coef_name, 
+                           paste("ability_", dataset_name, sep = "")] <- coef_value
+        standard_abilities[standard_abilities$team == coef_name, 
+                           paste("pvalue_", dataset_name, sep = "")] <- coef_pvalue
+      }
+    }
+  }
+  
+  result <- list(
+    list_models = list_models,
+    AIC_dataframe = AIC_dataframe,
+    standard_abilities = standard_abilities
+  )
+  return(result)
+  
+}
+```
+
+
+```{r}
+resu_cs <- fit_BTM_CS(list_STBT, teams, 4, reference = reference_w4)
+# resu_cs
+```
+```{r}
+resu_cs$standard_abilities
+```
+
+
+```{r}
+write.xlsx(resu_cs$AIC_dataframe, 
+           file = "E:/TFG DATA/RESULTS/AIC_PREDS_CS_w4.xlsx", row.names = FALSE)
+write.xlsx(resu_cs$standard_abilities, 
+           file = "E:/TFG DATA/RESULTS/COEFS_CS_w4.xlsx", row.names = FALSE)
+```
+
+# PREDICTING CONTEST-SPECIFIC BT EXPANSIONS
+
+The function predict_same_next_CS is used to make predictions with the 
+previously fitted models. It works just like predict_same_next_ST, with the 
+difference being the reprocessing of the HOME_TEAM and AWAY_TEAM variables as 
+dataframes with the columns 'team' and AT_HOME (1 for HOME_TEAM, 0 for 
+AWAY_TEAM).
+
+```{r}
+predict_same_next_CS <- function(model_CS, same_data,next_data) {
+  
+  same_data$HOME_TEAM <- as.factor(same_data$HOME_TEAM)
+  same_data$AWAY_TEAM <- as.factor(same_data$AWAY_TEAM)
+  same_data$HOME_WIN <- as.numeric(as.character(same_data$HOME_WIN))
+  same_data$AWAY_WIN <- as.numeric(as.character(same_data$AWAY_WIN))
+  same_data$HOME_TEAM <- data.frame(team = same_data$HOME_TEAM,
+                                     AT_HOME = 1)
+  same_data$AWAY_TEAM <- data.frame(team = same_data$AWAY_TEAM
+                                      , AT_HOME = 0)
+  next_data$HOME_TEAM <- as.factor(next_data$HOME_TEAM)
+  next_data$AWAY_TEAM <- as.factor(next_data$AWAY_TEAM)
+  next_data$HOME_WIN <- as.numeric(as.character(next_data$HOME_WIN))
+  next_data$AWAY_WIN <- as.numeric(as.character(next_data$AWAY_WIN))
+  next_data$HOME_TEAM <- data.frame(team = next_data$HOME_TEAM,
+                                     AT_HOME = 1)
+  next_data$AWAY_TEAM <- data.frame(team = next_data$AWAY_TEAM
+                                      , AT_HOME = 0)
+  
+  
+  pred_now_p <- predict(model_CS, se.fit = TRUE, level = 0, 
+                      type = "response", newdata = same_data)$fit
+  pred_now_b <- ifelse(pred_now_p > 0.5, 1, 0)
+  pred_next_p <- predict(model_CS, se.fit = TRUE, level = 0, 
+                      type = "response", newdata = next_data)$fit
+  pred_next_b <- ifelse(pred_next_p > 0.5, 1, 0)
+  
+  accuracy_now <- mean(pred_now_b == same_data$HOME_WIN)
+  accuracy_next <- mean(pred_next_b == next_data$HOME_WIN)
+  conf_matrix_now <- confusionMatrix(data = factor(pred_now_b,levels = c(0, 1)), 
+                               reference = factor(same_data$HOME_WIN,levels = c(0, 1)),
+                               positive = '1')
+  conf_matrix_next <- confusionMatrix(data = factor(pred_next_b,levels = c(0, 1)), 
+                             reference = factor(next_data$HOME_WIN,levels = c(0, 1)),
+                             positive = '1')
+  
+  result <- list(
+    accuracy_now = accuracy_now,
+    accuracy_next = accuracy_next,
+    conf_matrix_now = conf_matrix_now,
+    conf_matrix_next = conf_matrix_next
+  )
+  return(result)
+  
+}
+```
+
+
+```{r}
+test_list <- list(list_ST_TEST$AFL2023_TEST,
+                  list_ST_TEST$AFL2020_TEST,
+                  list_ST_TEST$AFL2021_TEST,
+                  list_ST_TEST$AFL2022_TEST)
+bindi <- do.call(rbind, test_list)
+preds_CS <- predict_same_next_CS(resu_cs$list_models$AFL2019,
+                                 bindi, 
+                                 list_ST_TEST$AFL2023_TEST)
+preds_CS$conf_matrix_now
+preds_CS$conf_matrix_next
+```

@@ -1,0 +1,442 @@
+---
+title: "Untitled"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# DISCLAIMER
+
+This code was made by Carlos Rafael Gonzalez Soffner for the Final Thesis 
+presented to the Bachelor of Data and Business Analytics. Anyone is welcomed to
+use this file or any part of it for their projects as long as they reference
+this thesis, code or author.
+
+Bests,
+
+Carlos.
+
+# LIBRARIES
+
+The AFL data used in this thesis is fetched through the fitzRoy package.
+Ensure it is installed and imported before running the cells below.
+
+```{r}
+library(fitzRoy)
+```
+
+# FETCHING RESULTS
+
+Results are fetched from AFLtables with the function fetch_results(). A for 
+loop is used to retrieve results from 2012 to 2023, even if the final seasons
+used in this thesis are 2015-23. Each season is retrieved individually and 
+appended into a list. All datasets in the list are binded with rbind.
+
+```{r}
+results_list <- list()
+for (season in 2012:2023) {
+  print(paste("Fetching results for", season))
+  results <- fetch_results(season, comp = "AFLM", 
+                           round_number = NULL,
+                           source = "afltables")
+  results_list[[as.character(season)]] <- results
+  print(paste("Fetched results for", season))
+}
+results_afl_tables_12TO23 <- do.call(rbind, results_list)
+
+```
+
+```{r}
+write.csv(results_afl_tables_12TO23, 
+          file = "E:/TFG DATA/results_afl_tables_12TO23.csv", 
+          row.names = FALSE)
+```
+
+
+```{r}
+##########################################################################
+# IGNORE - TRIALS
+# These lines are commented but feel free to use them to visualise the data
+# from one seasons and have an idea of what is being fetched without having
+# to wait for the for loop.
+##########################################################################
+
+# results_season_23_afltables <- fetch_results(2023, comp = "AFLM", 
+#                                             round_number = NULL,
+#                                             source = "afltables")
+# 
+# results_season_22_afltables <- fetch_results(2022, comp = "AFLM", 
+#                                             round_number = NULL,
+#                                             source = "afltables")
+# 
+# results_season_21_afltables <- fetch_results(2021, comp = "AFLM", 
+#                                             round_number = NULL,
+#                                             source = "afltables")
+# 
+# results_afl_tables_21TO23 <- rbind(results_season_21_afltables, 
+#                                    results_season_22_afltables, 
+#                                    results_season_23_afltables)
+# 
+# View(results_afl_tables_21TO23)
+```
+
+
+```{r}
+# write.csv(results_afl_tables_21TO23, 
+#           file = "E:/TFG DATA/results_afl_tables_21TO23.csv", 
+#           row.names = FALSE)
+```
+
+
+# FETCHING LADDER
+
+Ladder data for seasons 2015 to 2023 is fetched form the AFL with the function
+fetch_ladder(). Each season is fetched individually since the number of columns
+might change season-to-season or even in the middle of the season, probably as 
+a consequence from new rules or standards to document data in the AFL. The file
+with the ladder data for all seasons is created by running rbind on the
+individually fetched seasons.
+
+
+```{r}
+
+
+ladder23 <- data.frame()
+season <-2023
+for (round in 1:24) {
+  print(paste("Fetching", round, nrow(ladder23), ncol(ladder23)))
+  round_ladder <- fetch_ladder(season, comp = "AFLM", round_number = round, source = "AFL")
+  
+  if (nrow(ladder23)>0){
+    missing_columns <- setdiff(names(ladder23), names(round_ladder))
+    for (col in missing_columns) {
+      round_ladder[[col]] <- NA
+    }
+    missing_columns <- setdiff(names(round_ladder),names(ladder23))
+    for (col in missing_columns) {
+      ladder23[[col]] <- NA
+    }
+    
+  }
+  
+  ladder23  <- rbind(ladder23 , round_ladder)
+}
+
+View(ladder23)
+
+```
+
+```{r}
+ladder22 <- data.frame()
+season <-2022
+for (round in 1:23) {
+  print(paste("Fetching", round, nrow(ladder22), ncol(ladder22)))
+  round_ladder <- fetch_ladder(season, comp = "AFLM", round_number = round, source = "AFL")
+  
+  if (nrow(ladder22)>0){
+    missing_columns <- setdiff(names(ladder22), names(round_ladder))
+    for (col in missing_columns) {
+      round_ladder[[col]] <- NA
+    }
+    missing_columns <- setdiff(names(round_ladder),names(ladder22))
+    for (col in missing_columns) {
+      ladder22[[col]] <- NA
+    }
+    
+  }
+  
+  ladder22  <- rbind(ladder22 , round_ladder)
+}
+
+View(ladder22)
+```
+
+
+```{r}
+ladder21 <- data.frame()
+season <-2021
+for (round in 1:23) {
+  print(paste("Fetching", round, nrow(ladder21), ncol(ladder21)))
+  round_ladder <- fetch_ladder(season, comp = "AFLM", round_number = round, source = "AFL")
+  
+  if (nrow(ladder21)>0){
+    missing_columns <- setdiff(names(ladder21), names(round_ladder))
+    for (col in missing_columns) {
+      round_ladder[[col]] <- NA
+    }
+    missing_columns <- setdiff(names(round_ladder),names(ladder21))
+    for (col in missing_columns) {
+      ladder21[[col]] <- NA
+    }
+    
+  }
+  
+  ladder21  <- rbind(ladder21 , round_ladder)
+}
+
+View(ladder21)
+```
+
+
+```{r}
+ladder20 <- data.frame()
+season <-2020
+for (round in 1:18) {
+  print(paste("Fetching", round, nrow(ladder20), ncol(ladder20)))
+  round_ladder <- fetch_ladder(season, comp = "AFLM", round_number = round, source = "AFL")
+  
+  if (nrow(ladder20)>0){
+    missing_columns <- setdiff(names(ladder20), names(round_ladder))
+    for (col in missing_columns) {
+      round_ladder[[col]] <- NA
+    }
+    missing_columns <- setdiff(names(round_ladder),names(ladder20))
+    for (col in missing_columns) {
+      ladder20[[col]] <- NA
+    }
+    
+  }
+  
+  ladder20  <- rbind(ladder20 , round_ladder)
+}
+
+View(ladder20)
+```
+```{r}
+ladder19 <- data.frame()
+season <-2019
+for (round in 1:23) {
+  print(paste("Fetching", round, nrow(ladder19), ncol(ladder19)))
+  round_ladder <- fetch_ladder(season, comp = "AFLM", round_number = round, source = "AFL")
+  
+  if (nrow(ladder19)>0){
+    missing_columns <- setdiff(names(ladder19), names(round_ladder))
+    for (col in missing_columns) {
+      round_ladder[[col]] <- NA
+    }
+    missing_columns <- setdiff(names(round_ladder),names(ladder19))
+    for (col in missing_columns) {
+      ladder19[[col]] <- NA
+    }
+    
+  }
+  
+  ladder19  <- rbind(ladder19 , round_ladder)
+}
+
+View(ladder19)
+```
+
+```{r}
+ladder18 <- data.frame()
+season <-2018
+for (round in 1:23) {
+  print(paste("Fetching", round, nrow(ladder18), ncol(ladder18)))
+  round_ladder <- fetch_ladder(season, comp = "AFLM", round_number = round, source = "AFL")
+  
+  if (nrow(ladder18)>0){
+    missing_columns <- setdiff(names(ladder18), names(round_ladder))
+    for (col in missing_columns) {
+      round_ladder[[col]] <- NA
+    }
+    missing_columns <- setdiff(names(round_ladder),names(ladder18))
+    for (col in missing_columns) {
+      ladder18[[col]] <- NA
+    }
+    
+  }
+  
+  ladder18  <- rbind(ladder18 , round_ladder)
+}
+
+View(ladder18)
+```
+
+```{r}
+ladder17 <- data.frame()
+season <-2017
+for (round in 1:23) {
+  print(paste("Fetching", round, nrow(ladder17), ncol(ladder17)))
+  round_ladder <- fetch_ladder(season, comp = "AFLM", round_number = round, source = "AFL")
+  
+  if (nrow(ladder17)>0){
+    missing_columns <- setdiff(names(ladder17), names(round_ladder))
+    for (col in missing_columns) {
+      round_ladder[[col]] <- NA
+    }
+    missing_columns <- setdiff(names(round_ladder),names(ladder17))
+    for (col in missing_columns) {
+      ladder17[[col]] <- NA
+    }
+    
+  }
+  
+  ladder17  <- rbind(ladder17 , round_ladder)
+}
+
+View(ladder17)
+```
+
+
+```{r}
+ladder16 <- data.frame()
+season <-2016
+for (round in 1:23) {
+  print(paste("Fetching", round, nrow(ladder16), ncol(ladder16)))
+  round_ladder <- fetch_ladder(season, comp = "AFLM", round_number = round, source = "AFL")
+  
+  if (nrow(ladder16)>0){
+    missing_columns <- setdiff(names(ladder16), names(round_ladder))
+    for (col in missing_columns) {
+      round_ladder[[col]] <- NA
+    }
+    missing_columns <- setdiff(names(round_ladder),names(ladder16))
+    for (col in missing_columns) {
+      ladder16[[col]] <- NA
+    }
+    
+  }
+  
+  ladder16  <- rbind(ladder16 , round_ladder)
+}
+
+View(ladder16)
+```
+
+```{r}
+ladder15 <- data.frame()
+season <-2015
+for (round in 1:23) {
+  print(paste("Fetching", round, nrow(ladder15), ncol(ladder15)))
+  round_ladder <- fetch_ladder(season, comp = "AFLM", round_number = round, source = "AFL")
+  
+  if (nrow(ladder15)>0){
+    missing_columns <- setdiff(names(ladder15), names(round_ladder))
+    for (col in missing_columns) {
+      round_ladder[[col]] <- NA
+    }
+    missing_columns <- setdiff(names(round_ladder),names(ladder15))
+    for (col in missing_columns) {
+      ladder15[[col]] <- NA
+    }
+    
+  }
+  
+  ladder15  <- rbind(ladder15 , round_ladder)
+}
+
+View(ladder15)
+```
+
+```{r}
+missing_columns <- setdiff(names(ladder22), names(ladder20))
+for (col in missing_columns) {
+  print(col)
+  ladder21[[col]] <- NA
+  ladder20[[col]] <- NA
+}  
+
+
+```
+```{r}
+missing_columns <- setdiff(names(ladder20), names(ladder19))
+for (col in missing_columns) {
+  print(col)
+    ladder19[[col]] <- NA
+    ladder18[[col]] <- NA
+    ladder17[[col]] <- NA
+    ladder16[[col]] <- NA
+    ladder15[[col]] <- NA
+}  
+```
+
+```{r}
+LADDER_15TO23 <- rbind(ladder15, ladder16, ladder17,
+                       ladder18, ladder19, ladder20,
+                       ladder21, ladder22, ladder23)
+```
+
+
+```{r}
+write.csv(LADDER_15TO23, file = "E:/TFG DATA/LADDER_15TO23.csv", 
+          row.names = FALSE)
+```
+
+# FETCHING PLAYER DATA
+
+Player data (performance indicators) is fetched from the AFL with the 
+fetch_player_stats_afl() function.
+Each season is fetched individually so it is easier to add a SEASON column to 
+identify the each season when binding the data. They are finally concatenated
+together. The middle cell includes a code to compare the columns in each season
+in case they are different.
+
+```{r}
+player15 <- fetch_player_stats_afl(season = 2015
+                                      , comp = "AFLM")
+player16 <- fetch_player_stats_afl(season = 2016
+                                      , comp = "AFLM")
+player17 <- fetch_player_stats_afl(season = 2017
+                                      , comp = "AFLM")
+
+player18 <- fetch_player_stats_afl(season = 2018
+                                      , comp = "AFLM")
+player19 <- fetch_player_stats_afl(season = 2019
+                                      , comp = "AFLM")
+player20 <- fetch_player_stats_afl(season = 2020
+                                      , comp = "AFLM")
+
+player21 <- fetch_player_stats_afl(season = 2021
+                                      , comp = "AFLM")
+player22 <- fetch_player_stats_afl(season = 2022
+                                      , comp = "AFLM")
+player23 <- fetch_player_stats_afl(season = 2023
+                                      , comp = "AFLM")
+player15$SEASON <- 2015
+player16$SEASON <- 2016
+player17$SEASON <- 2017
+player18$SEASON <- 2018
+player19$SEASON <- 2019
+player20$SEASON <- 2020
+player21$SEASON <- 2021
+player22$SEASON <- 2022
+player23$SEASON <- 2023
+
+```
+
+```{r}
+missing_columns <- setdiff(names(player16), names(player17))
+for (col in missing_columns) {
+  print(col)
+  player17[[col]] <- NA
+  player18[[col]] <- NA
+  player19[[col]] <- NA
+  player20[[col]] <- NA
+  player21[[col]] <- NA
+  player22[[col]] <- NA
+  player23[[col]] <- NA
+}  
+```
+
+
+```{r}
+
+PIS_21TO23 <- rbind(player15,
+                    player16,
+                    player17,
+                    player18,
+                    player19,
+                    player20,
+                    player21,
+                    player22,
+                    player23)
+
+```
+
+```{r}
+ write.csv(PIS_21TO23, file = "E:/TFG DATA/PIS_15TO23.csv", 
+          row.names = FALSE)
+```
+

@@ -1,0 +1,893 @@
+---
+title: "BT_TS_TV"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# DISCLAIMER
+
+This code was made by Carlos Rafael Gonzalez Soffner for the Final Thesis 
+presented to the Bachelor of Data and Business Analytics. Anyone is welcomed to
+use this file or any part of it for their projects as long as they reference
+this thesis, code or author.
+
+Bests,
+
+Carlos.
+
+
+# LIBRARIES
+
+The main libraries needed for modelling are readxl,BradleyTerry2 and dplyr.
+Given that it is a classification task, it is likely that other libraries like 
+pROC or ggplot2 might come at hand. Indeed, they were used in the initial
+stages of the thesis to familiarise with the predictions, so they were left here
+for future use.
+
+```{r cars}
+library(readxl)
+library(BradleyTerry2)
+library(openxlsx)
+library(dplyr)
+library(pROC)
+library(caret)
+library(tidyverse)
+library(ggplot2)
+```
+
+# DATA PREPARATION
+
+data_build prepares the data for modelling complex BT expansions.
+
+Parameters:
+  - homepath (string): path to home team data
+  - awaypath (string): path to away team data
+  - fixedpath (string): path to fixed effects data. For this thesis, none of
+  this features are used. It should have at least a column with the team names.
+  
+Returns:
+ - afldata (list): list with home, away and fixed dataframe
+
+```{r}
+data_build <- function(homepath, awaypath, fixedpath) {
+  
+  home <- as.data.frame(read_excel(homepath))
+  away <- as.data.frame(read_excel(awaypath))
+  fixed <- as.data.frame(read_excel(fixedpath))
+
+  row.names(fixed) <- fixed$TEAM
+  home$TEAM <- as.factor(home$TEAM)
+  away$TEAM <- as.factor(away$TEAM)
+  
+  afldata <- list(home = home, away = away, fixed = fixed)
+  
+  return(afldata) 
+}
+```
+
+# FITTING TEAM-SPECIFIC, TIME-VARIANT BT EXPANSION
+
+fit_BTM_TSTV is used to fit the team-specific, time-variant BT expansion to a
+particular season or window of seasons.
+
+Parameters:
+  - afldata (list): list with home, away and fixed dataframe
+  - feats (vector): vector of features to be modelled.
+
+Details:
+  - Trains a BT model on the train data for each feature. If the feature is 
+  found to be significant at the 5% level, it appends it to a list of 
+  significant features.
+  - Then, it trains a model on all the significant features and takes that with
+  the highest p-value. If it is not below 0.05, if discards the feature and
+  retrains the model. Otherwise, it finishes.
+  - If all features are discarded it returns an empty list. This will be useful
+  when making round-by-round predictions.
+
+Returns:
+ - model (model): final model with significant features.
+ - summary (summary object): summary of the model returned.
+
+```{r}
+fit_BTM_TSTV <- function(afldata, feats) {
+  
+  # Init
+  sig_feats <- list()
+  all_mod <- 0
+  # Fit single-feature models
+  for (feature in feats) {
+    # print(feature)
+    # Fit model
+    btm_model <- BTm(outcome = WIN,
+                     player1 = home,
+                     player2 = away,
+                     formula = as.formula(paste("~", feature, "+ (1|TEAM)")),
+                     id = "TEAM",
+                     data = afldata)
+    # P-value and significance, add feature if significant
+    summary_coef <- as.data.frame(as.array(summary(btm_model))[6])
+    av <- nchar(toString(as.array(summary(btm_model))[6]))
+    if (av < 10) {
+      summary_coef <- as.data.frame(as.array(summary(btm_model))[11])
+      }
+    # print(summary_coef)
+    colnames(summary_coef) <- c("estimate", "stderror", "zvalue", "pvalue")
+    p_value <- summary_coef$pvalue
+    if (p_value < 0.05) {
+      # cat("Feature", feature, "is significant with coefficient", 
+      #     coef(btm_model)[feature], "and p-value", p_value, "\n")
+      sig_feats <- c(sig_feats, feature)
+    }
+  }
+  
+
+  if (length(sig_feats) > 0) {
+    
+      while (all_mod == 0) {
+        formula_all <- as.formula(paste("~", paste(sig_feats, collapse = " + "),
+                                    "+ (1|TEAM)"))
+        btm_model_all <- BTm(outcome = WIN,
+                         player1 = home,
+                         player2 = away,
+                         formula = formula_all,
+                         id = "TEAM",
+                         data = afldata)
+        
+        summary_all <- as.data.frame(as.array(summary(btm_model_all))[6])
+        av <- nchar(toString(as.array(summary(btm_model_all))[6]))
+        if (av < 10) {
+          summary_all <- as.data.frame(as.array(summary(btm_model_all))[11])
+          }
+        # print(summary_all)
+        colnames(summary_all) <- c("estimate", "stderror", "zvalue", "pvalue")
+        row_max_pvalue <- which.max(summary_all$pvalue)
+        max_pvalue <- summary_all$pvalue[row_max_pvalue]
+        if (max_pvalue > 0.05) {
+          # cat("Feature", rownames(summary_all)[row_max_pvalue],
+          #     "has the highest p-value:", max_pvalue, "\n")
+          feature_to_remove <- rownames(summary_all)[row_max_pvalue]
+          sig_feats <- sig_feats[sig_feats != feature_to_remove]
+        } else {
+            all_mod <- 1
+          }
+    
+      }
+  } else {
+      btm_model_all <- list()
+    }
+  
+  return(list(model = btm_model_all, 
+              summary = summary(btm_model_all)))
+}
+```
+
+# EXAMPLES
+
+```{r}
+homepath <- "E:/TFG DATA/TS_TV_DATA/HOME_L4_AFL_TS_TV_FULL.xlsx"
+awaypath <- "E:/TFG DATA/TS_TV_DATA/AWAY_L4_AFL_TS_TV_FULL.xlsx"
+fixedpath <- "E:/TFG DATA/last_ladder_position.xlsx"
+feats_ALL <- list('CONSECUTIVE_WINS', 'CONSECUTIVE_LOSSES', 'LG_WON',
+       'LADDER_POSITION_DIFF', 'LADDERLY_POSITION_DIFF', 'POINTSAGAINST_DIFF',
+       'CLANGERS_CSUM_DIFF', 'FREES_AGAINST_CSUM_DIFF', 'TURNOVERS_CSUM_DIFF',
+       'CONTEST_DEFENSIVE_LOSS_CSUM_DIFF', 'WINS_CUMMULATIVE_DIFF',
+       'PERCENTAGE_DIFF', 'POINTSFOR_DIFF', 'DISPOSALS_CSUM_DIFF',
+       'DISPOSALS_EFFECTIVE_CSUM_DIFF', 'KICKS_CSUM_DIFF',
+       'KICKS_EFFECTIVE_CSUM_DIFF', 'HANDBALLS_CSUM_DIFF', 'MARKS_CSUM_DIFF',
+       'MARKS_INSIDE50_CSUM_DIFF', 'MARKS_CONTESTED_CSUM_DIFF',
+       'MARKS_ONLEAD_CSUM_DIFF', 'MARKS_INTERCEPT_CSUM_DIFF',
+       'BOUNCES_CSUM_DIFF', 'METRES_GAINED_CSUM_DIFF', 'POSESSIONS_CSUM_DIFF',
+       'POSESSIONS_CONTESTED_CSUM_DIFF', 'POSESSIONS_UNCONTESTED_CSUM_DIFF',
+       'GETS_GROUNDBALL_CSUM_DIFF', 'GETS_GROUNDBALL50_CSUM_DIFF',
+       'INSIDE50_CSUM_DIFF', 'GOALS_SHOTS_CSUM_DIFF',
+       'SCORE_LAUNCHES_CSUM_DIFF', 'CLEARANCES_CSUM_DIFF',
+       'CLEARANCES_CENTRE_CSUM_DIFF', 'CLEARANCES_STOPPAGE_CSUM_DIFF',
+       'HITOUTS_ADVANTAGE_CSUM_DIFF', 'HITOUTS_WIN_RATE_CSUM_DIFF',
+       'CONTEST_OFFENSIVE_WIN_CSUM_DIFF', 'TACKLES_CSUM_DIFF',
+       'TACKLES_INSIDE50_CSUM_DIFF', 'ONE_PERCENTERS_CSUM_DIFF',
+       'REBOUND_INSIDE50S_CSUM_DIFF', 'INTERCEPTS_CSUM_DIFF',
+       'PRESSURE_CSUM_DIFF', 'PRESSURE_DEFENSEHALF_CSUM_DIFF',
+       'SPOILS_CSUM_DIFF', 'DISPOSALS_EFFICIENCY_CSUM_DIFF',
+       'KICKS_EFFICIENCY_CSUM_DIFF', 'KICK2HANDBALL_CSUM_DIFF',
+       'POSESSIONS_CONTESTED_RATE_CSUM_DIFF', 'GOALS_ACCURACY_CSUM_DIFF',
+       'HITOUTS_ADVANTAGE_RATE_CSUM_DIFF',
+       'CONTEST_OFFENSIVE_WIN_RATE_CSUM_DIFF',
+       'CONTEST_DEFENSIVE_LOSS_RATE_CSUM_DIFF', 'AT_HOME', 'HOMEGROUND',
+       'INTERSTATE')
+feats_L4 <- list('CONSECUTIVE_WINS', 'CONSECUTIVE_LOSSES', 'LG_WON', 'L4G_WINS',
+       'LADDER_POSITION_DIFF', 'LADDERLY_POSITION_DIFF', 'POINTSAGAINST_DIFF',
+       'CLANGERS_L4_CSUM_DIFF', 'FREES_AGAINST_L4_CSUM_DIFF',
+       'TURNOVERS_L4_CSUM_DIFF', 'CONTEST_DEFENSIVE_LOSS_L4_CSUM_DIFF',
+       'PERCENTAGE_DIFF', 'POINTSFOR_DIFF', 'DISPOSALS_L4_CSUM_DIFF',
+       'DISPOSALS_EFFECTIVE_L4_CSUM_DIFF', 'KICKS_L4_CSUM_DIFF',
+       'KICKS_EFFECTIVE_L4_CSUM_DIFF', 'HANDBALLS_L4_CSUM_DIFF',
+       'MARKS_L4_CSUM_DIFF', 'MARKS_INSIDE50_L4_CSUM_DIFF',
+       'MARKS_CONTESTED_L4_CSUM_DIFF', 'MARKS_ONLEAD_L4_CSUM_DIFF',
+       'MARKS_INTERCEPT_L4_CSUM_DIFF', 'BOUNCES_L4_CSUM_DIFF',
+       'METRES_GAINED_L4_CSUM_DIFF', 'POSESSIONS_L4_CSUM_DIFF',
+       'POSESSIONS_CONTESTED_L4_CSUM_DIFF',
+       'POSESSIONS_UNCONTESTED_L4_CSUM_DIFF', 'GETS_GROUNDBALL_L4_CSUM_DIFF',
+       'GETS_GROUNDBALL50_L4_CSUM_DIFF', 'INSIDE50_L4_CSUM_DIFF',
+       'GOALS_SHOTS_L4_CSUM_DIFF', 'SCORE_LAUNCHES_L4_CSUM_DIFF',
+       'CLEARANCES_L4_CSUM_DIFF', 'CLEARANCES_CENTRE_L4_CSUM_DIFF',
+       'CLEARANCES_STOPPAGE_L4_CSUM_DIFF', 'HITOUTS_ADVANTAGE_L4_CSUM_DIFF',
+       'HITOUTS_WIN_RATE_L4_CSUM_DIFF', 'CONTEST_OFFENSIVE_WIN_L4_CSUM_DIFF',
+       'TACKLES_L4_CSUM_DIFF', 'TACKLES_INSIDE50_L4_CSUM_DIFF',
+       'ONE_PERCENTERS_L4_CSUM_DIFF', 'REBOUND_INSIDE50S_L4_CSUM_DIFF',
+       'INTERCEPTS_L4_CSUM_DIFF', 'PRESSURE_L4_CSUM_DIFF',
+       'PRESSURE_DEFENSEHALF_L4_CSUM_DIFF', 'SPOILS_L4_CSUM_DIFF',
+       'DISPOSALS_EFFICIENCY_L4_CSUM_DIFF', 'KICKS_EFFICIENCY_L4_CSUM_DIFF',
+       'KICK2HANDBALL_L4_CSUM_DIFF', 'POSESSIONS_CONTESTED_RATE_L4_CSUM_DIFF',
+       'GOALS_ACCURACY_L4_CSUM_DIFF', 'HITOUTS_ADVANTAGE_RATE_L4_CSUM_DIFF',
+       'CONTEST_OFFENSIVE_WIN_RATE_L4_CSUM_DIFF',
+       'CONTEST_DEFENSIVE_LOSS_RATE_L4_CSUM_DIFF', 'AT_HOME', 'HOMEGROUND',
+       'INTERSTATE')
+```
+
+```{r}
+# RUN ONLY FOR SINGLE MODELS
+
+afl <- data_build(homepath, awaypath, fixedpath)
+resu <- fit_BTM_TSTV(afl, feats_L4)
+resu$summary
+```
+
+
+```{r}
+# RUN FOR 2-WINDOW
+
+homepath15 <- "E:/TFG DATA/TS_TV_DATA/HOME_L4_AFL_TS_TV_2022.xlsx"
+awaypath15 <- "E:/TFG DATA/TS_TV_DATA/AWAY_L4_AFL_TS_TV_2022.xlsx"
+homepath16 <- "E:/TFG DATA/TS_TV_DATA/HOME_L4_AFL_TS_TV_2023.xlsx"
+awaypath16 <- "E:/TFG DATA/TS_TV_DATA/AWAY_L4_AFL_TS_TV_2023.xlsx"
+afl2015 <- data_build(homepath15, awaypath15, fixedpath)
+afl2016 <- data_build(homepath16, awaypath16, fixedpath)
+
+afl2015$home <- do.call(rbind, list(afl2015$home,
+                                    afl2016$home))
+afl2015$away <- do.call(rbind, list(afl2015$away,
+                                    afl2016$away))
+resu <- fit_BTM_TSTV(afl2015, feats_L4)
+resu$summary
+```
+
+# PREDICTING WITH TEAM-SPECIFIC, TIME-VARIANT BT EXPANSION
+
+predict_same_next_TSTV is used to predict with the team-specific, time-variant 
+BT expansion on the train and test data.
+
+Parameters:
+  - model_TSTV (model): final model with significant features.
+  - same_data (list): training data.
+  - next_data (list): test data.
+
+Returns:
+  - accuracy_now (numeric): classification accuracy over train set
+  - accuracy_next (numeric): classification accuracy over test set
+  - conf_matrix_now: confusion matrix for the predictions over the train set.
+  - conf_matrix_next: confusion matrix for the predictions over the test set.
+
+```{r}
+predict_same_next_TSTV <- function(model_TSTV, same_data,next_data) {
+  
+  pred_now_p <- predict(model_TSTV, se.fit = TRUE, level = 0, 
+                      type = "response", newdata = same_data)$fit
+  pred_now_b <- ifelse(pred_now_p > 0.5, 1, 0)
+  pred_next_p <- predict(model_TSTV, se.fit = TRUE, level = 0, 
+                      type = "response", newdata = next_data)$fit
+  pred_next_b <- ifelse(pred_next_p > 0.5, 1, 0)
+  accuracy_now <- mean(pred_now_b == same_data$HOME_WIN)
+  accuracy_next <- mean(pred_next_b == next_data$HOME_WIN)
+  conf_matrix_now <- confusionMatrix(data = factor(pred_now_b,levels = c(0, 1)), 
+                               reference = factor(same_data$home$WIN,levels = c(0, 1)),
+                               positive = '1')
+  conf_matrix_next <- confusionMatrix(data = factor(pred_next_b,levels = c(0, 1)), 
+                             reference = factor(next_data$home$WIN,levels = c(0, 1)),
+                             positive = '1')
+  
+  result <- list(
+    accuracy_now = accuracy_now,
+    accuracy_next = accuracy_next,
+    conf_matrix_now = conf_matrix_now,
+    conf_matrix_next = conf_matrix_next
+  )
+  return(result)
+  
+}
+
+```
+
+# EXAMPLE
+
+```{r}
+test_homepath <- "E:/TFG DATA/TS_TV_DATA/HOME_L4_AFL_TS_TV_2023.xlsx"
+test_awaypath <- "E:/TFG DATA/TS_TV_DATA/AWAY_L4_AFL_TS_TV_2023.xlsx"
+test <- data_build(test_homepath, test_awaypath, fixedpath)
+
+prepre <- predict_same_next_TSTV(resu$model, afl2015, test)
+prepre$conf_matrix_now
+prepre$conf_matrix_next
+
+```
+
+# INTERACTION EFFECTS
+
+Use these cells to test for interaction effects. The thesis found no significant
+ones.
+
+```{r}
+homepath <- "E:/TFG DATA/TS_TV_DATA/HOME_ALL_AFL_TS_TV_2015.xlsx"
+awaypath <- "E:/TFG DATA/TS_TV_DATA/AWAY_ALL_AFL_TS_TV_2015.xlsx"
+afl <- data_build(homepath, awaypath, fixedpath)
+resu <- fit_BTM_TSTV(afl, feats_ALL)
+resu$summary
+```
+
+```{r}
+mod_interactions <-  BTm(outcome = WIN,
+                     player1 = home,
+                     player2 = away,
+                     formula = ~ AT_HOME
+                     + HOMEGROUND
+                     + HOMEGROUND:AT_HOME
+                     # + INTERSTATE
+                     # + AT_HOME:INTERSTATE
+                     + (1|TEAM),
+                     id = "TEAM",
+                     data = afl)
+summary(mod_interactions)
+```
+
+```{r}
+resu$model <- BTm(outcome = WIN, player1 = home, player2 = away,
+                      formula = ~ LADDERLY_POSITION_DIFF
+                      + POINTSFOR_DIFF 
+                      + HITOUTS_WIN_RATE_L4_CSUM_DIFF
+                      + INTERSTATE
+                      + AT_HOME
+                      + HOMEGROUND
+                      + AT_HOME:HOMEGROUND
+                        + (1|TEAM),
+                     id = "TEAM",
+                     data = afl)
+  
+summary(resu$model)
+```
+
+```{r}
+test_homepath <- "E:/TFG DATA/TS_TV_DATA/HOME_L4_AFL_TS_TV_2016.xlsx"
+test_awaypath <- "E:/TFG DATA/TS_TV_DATA/AWAY_L4_AFL_TS_TV_2016.xlsx"
+test <- data_build(test_homepath, test_awaypath, fixedpath)
+
+prepre <- predict_same_next_TSTV(resu$model, afl, test)
+prepre$conf_matrix_now
+prepre$conf_matrix_next
+```
+
+# GAME2GAME PREDICTION
+
+dynamic_tester can be used to predict outcomes game-to-game. The thesis 
+discourages this option since some games take place at the same time. Please, 
+refer to dynamic_tester_ROUND
+
+```{r}
+dynamic_tester <- function(model, train_data, next_season, fixed, feats) {
+  
+  home_win_target <- next_season$home$WIN
+  df_for_cm <- data.frame(TARGET = next_season$home$WIN, 
+                           ROUND_NUMBER = next_season$home$ROUND_NUMBER)
+  
+  print(length(df_for_cm$TARGET))
+  current_game <- 1
+  num_games <- nrow(next_season$home)
+  # print(num_games)
+  list_preds <- vector("list", length = num_games)
+  cat('GAMES TO PREDICT',num_games, "\n")
+  
+  while (current_game < num_games + 1) {
+    
+    # PREDICT NEXT GAME
+    home_df <- next_season$home[current_game, ]
+    away_df <- next_season$away[current_game, ]
+    tester <- list(home = home_df, away = away_df, fixed = fixed)
+    
+    pred <- predict(model, se.fit = TRUE, level = 0, type = "response", newdata = tester)$fit
+    list_preds[[current_game]] <- pred
+    cat('PREDICTED GAME',current_game,
+        "WITH ESTIMATED WINNING CHANCE",pred,
+        "CURRENT LENGTH",length(list_preds),"\n")
+    # RETRAIN MODEL WITH THIS GAME
+    train_data$home <- do.call(rbind, list(train_data$home, home_df))
+    train_data$away <- do.call(rbind, list(train_data$away, away_df))
+    model <- fit_BTM_TSTV(train_data, feats)$model
+    
+    current_game <- current_game + 1
+
+    
+  }
+  
+  # RETURN PREDICTIONS
+  print('---------------------------------')
+  print('TESTING FINISHED')
+  print('---------------------------------')
+  list_preds <- lapply(list_preds, function(x) ifelse(x > 0.5, 1, 0))
+  df_for_cm$preds <- unlist(list_preds)
+  df_for_cm$correct <- ifelse(df_for_cm$TARGET == df_for_cm$preds, 1, 0)
+  cm <- confusionMatrix(data = factor(df_for_cm$preds,levels = c(0, 1)), 
+                        reference = factor(df_for_cm$TARGET,levels = c(0, 1)),
+                        positive = '1')
+  result <- list(df = df_for_cm,
+                 cm = cm)
+  
+  return(result)
+  
+}
+```
+
+
+
+```{r}
+fixedpath <- "E:/TFG DATA/last_ladder_position.xlsx"
+
+homepath <- "E:/TFG DATA/TS_TV_DATA/HOME_L4_AFL_TS_TV_2016.xlsx"
+awaypath <- "E:/TFG DATA/TS_TV_DATA/AWAY_L4_AFL_TS_TV_2016.xlsx"
+train_data <- data_build(homepath, awaypath, fixedpath)
+resu <- fit_BTM_TSTV(train_data, feats_L4)
+
+homepath_test <- "E:/TFG DATA/TS_TV_DATA/HOME_L4_AFL_TS_TV_2017.xlsx"
+awaypath_test <- "E:/TFG DATA/TS_TV_DATA/AWAY_L4_AFL_TS_TV_2017.xlsx"
+next_season <- data_build(homepath_test, awaypath_test, fixedpath)
+
+resu <- fit_BTM_TSTV(train_data, feats_L4)
+```
+
+```{r}
+new_accuracy <- dynamic_tester(resu$model,
+                               train_data, 
+                               next_season, 
+                               fixedpath,
+                               feats_L4)
+```
+```{r}
+new_accuracy
+```
+
+
+```{r}
+write.xlsx(resu_cs$AIC_dataframe, 
+           file = "E:/TFG DATA/RESULTS/AIC_PREDS_CS_w4.xlsx", row.names = FALSE)
+```
+
+
+# ROUND2ROUND PREDICTION
+
+dynamic_tester_ROUND is used to predict games round-by-round with the Addition
+or Subtitution strategies. Please, refer to the thesis for an explanation of 
+these strategies.
+
+Parameters:
+
+  - model (model): team-specific, time-variant BT expansion trained beforehand.
+  - train_data (list): data used for training the model before.
+  - next_season (list): test data.
+  - fixed (string): path to fixed effects data.
+  - feats (vector): list of features to fit to the model.
+  - subti (numeric): 1 applies the substitution strategy, otherwise applies the
+  addition strategy.
+  
+Details:
+  - Predicts on the test dataset round-by-round.
+  - Adds or substitutes that round depending on the strategy specified in subti.
+  - Retrains the model and predicts the following round.
+
+Returns:
+  - df (data.frame): dataframe with target variable, round number, prediction
+   and whether the prediction was correct
+  - cm: confusion matrix for predicted values.
+
+```{r}
+dynamic_tester_ROUND <- function(model, train_data, next_season, fixed, feats,
+                                 subti) {
+  
+  home_win_target <- next_season$home$WIN
+  df_for_cm <- data.frame(TARGET = next_season$home$WIN, 
+                          ROUND_NUMBER = next_season$home$ROUND_NUMBER)
+  
+  current_round <- 1
+  num_rounds <- max(next_season$home$ROUND_NUMBER)
+  list_preds <- vector("list", length = nrow(next_season$home))
+  cat('ROUNDS TO PREDICT', num_rounds, "\n",
+      'GAMES TO PREDICT',length(df_for_cm$TARGET) , "\n")
+  
+  while (current_round <= num_rounds) {
+    
+    # PREDICT NEXT ROUND
+    home_df <- next_season$home[next_season$home$ROUND_NUMBER == current_round, ]
+    away_df <- next_season$away[next_season$away$ROUND_NUMBER == current_round, ]
+    tester <- list(home = home_df, away = away_df, fixed = fixed)
+    
+    pred <- predict(model, se.fit = TRUE, level = 0, 
+                    type = "response", newdata = tester)$fit
+    list_preds[[current_round]] <- pred
+    cat('PREDICTED ROUND', current_round,
+        "WITH ESTIMATED WINNING CHANCE", pred,"\n")
+    
+    # RETRAIN MODEL WITH THIS ROUND
+    
+    ######################################################################
+    if (subti == 1){
+      train_data$home <- subset(train_data$home, ROUND_NUMBER != current_round)
+      train_data$away <- subset(train_data$away, ROUND_NUMBER != current_round)
+    }
+    ######################################################################
+    
+    train_data$home <- do.call(rbind, list(train_data$home, home_df))
+    train_data$away <- do.call(rbind, list(train_data$away, away_df))
+    model <- fit_BTM_TSTV(train_data, feats)$model
+    
+    current_round <- current_round + 1
+  }
+  
+  # RETURN PREDICTIONS
+  cat('---------------------------------', '\n',
+      'TESTING FINISHED', '\n',
+      '---------------------------------')
+  df_for_cm$probs_og <- unlist(list_preds)
+  list_preds <- lapply(list_preds, function(x) ifelse(x > 0.5, 1, 0))
+  df_for_cm$preds <- unlist(list_preds)
+  df_for_cm$correct <- ifelse(df_for_cm$TARGET == df_for_cm$preds, 1, 0)
+  cm <- confusionMatrix(data = factor(df_for_cm$preds, levels = c(0, 1)), 
+                        reference = factor(df_for_cm$TARGET, levels = c(0, 1)),
+                        positive = '1')
+  result <- list(df = df_for_cm,
+                 cm = cm)
+  
+  return(result)
+}
+
+```
+
+# EXAMPLE
+
+```{r}
+fixedpath <- "E:/TFG DATA/last_ladder_position.xlsx"
+
+homepath1 <- "E:/TFG DATA/TS_TV_DATA/HOME_L4_AFL_TS_TV_2022.xlsx"
+awaypath1 <- "E:/TFG DATA/TS_TV_DATA/AWAY_L4_AFL_TS_TV_2022.xlsx"
+homepath2 <- "E:/TFG DATA/TS_TV_DATA/HOME_L4_AFL_TS_TV_2023.xlsx"
+awaypath2 <- "E:/TFG DATA/TS_TV_DATA/AWAY_L4_AFL_TS_TV_2023.xlsx"
+afl1 <- data_build(homepath1, awaypath1, fixedpath)
+afl2 <- data_build(homepath2, awaypath2, fixedpath)
+
+afl1$home <- do.call(rbind, list(afl1$home,
+                                    afl2$home))
+afl1$away <- do.call(rbind, list(afl1$away,
+                                    afl2$away))
+
+
+homepath <- "E:/TFG DATA/TS_TV_DATA/HOME_ALL_AFL_TS_TV_2015.xlsx"
+awaypath <- "E:/TFG DATA/TS_TV_DATA/AWAY_ALL_AFL_TS_TV_2015.xlsx"
+train_data <- data_build(homepath, awaypath, fixedpath)
+resu <- fit_BTM_TSTV(train_data, feats_ALL)
+
+homepath_test <- "E:/TFG DATA/TS_TV_DATA/HOME_ALL_AFL_TS_TV_2016.xlsx"
+awaypath_test <- "E:/TFG DATA/TS_TV_DATA/AWAY_ALL_AFL_TS_TV_2016.xlsx"
+next_season <- data_build(homepath_test, awaypath_test, fixedpath)
+
+new_accuracy <- dynamic_tester_ROUND(resu$model,
+                               train_data, 
+                               next_season, 
+                               fixedpath,
+                               feats_ALL)
+new_accuracy$cm
+```
+
+```{r}
+new_accuracy$cm
+```
+
+
+```{r}
+write.xlsx(new_accuracy$df, 
+           file = "E:/TFG DATA/RESULTS/EXPERIMENT5/ALL_ROUND_BY_ROUND_PREDS2.xlsx",
+           row.names = FALSE)
+
+```
+
+# MIXED PREDICTION
+
+dynamic_tester_MIXED is used to predict seasons with the Incremental strategy.
+Please, refer to the thesis for an explanation of 
+this strategy.
+
+Parameters:
+
+  - model (model): team-specific, time-variant BT expansion trained beforehand.
+  - train_data (list): data used for training the model before.
+  - next_season (list): test data.
+  - fixed (string): path to fixed effects data.
+  - feats (vector): list of features to fit to the model.
+  - subti (numeric): 1 applies the substitution strategy, otherwise applies the
+  incremental strategy.
+
+Details:
+  - Predicts the first 2 rounds with the previously trained model.
+  - For round 3 onwards, it trains a model in the test season. If no features
+  are found to be significant, it uses the model before. Otherwise, it predicts
+  with the new model.
+  
+Returns:
+  - df (data.frame): dataframe with target variable, round number, predictions
+    for both models and whether they were correct
+
+```{r}
+dynamic_tester_MIXED <- function(model,
+                                 train_data,
+                                 next_season,
+                                 fixed,
+                                 feats,
+                                 subti) {
+  
+  home_win_target <- next_season$home$WIN
+  df_for_cm <- data.frame(TARGET = next_season$home$WIN, 
+                          ROUND_NUMBER = next_season$home$ROUND_NUMBER)
+  
+  current_round <- 1
+  num_rounds <- max(next_season$home$ROUND_NUMBER)
+  list_preds <- vector("list", length = nrow(next_season$home))
+  
+  next_season_train <- list()
+  list_preds_next_season <- vector("list", length = nrow(next_season$home))
+  
+  cat('ROUNDS TO PREDICT', num_rounds, "\n",
+      'GAMES TO PREDICT',length(df_for_cm$TARGET) , "\n")
+  
+  while (current_round <= num_rounds) {
+    
+    # PREDICT NEXT ROUND
+    home_df <- next_season$home[next_season$home$ROUND_NUMBER == current_round, ]
+    away_df <- next_season$away[next_season$away$ROUND_NUMBER == current_round, ]
+    tester <- list(home = home_df, away = away_df, fixed = fixed)
+    
+    pred <- predict(model, se.fit = TRUE, level = 0, 
+                    type = "response", newdata = tester)$fit
+    list_preds[[current_round]] <- pred
+    
+    if (current_round == 1){
+      pred_same <- pred
+      list_preds_next_season[[current_round]] <- pred_same
+      next_season_train <- list(home = next_season$home[next_season$home$ROUND_NUMBER == 1, ],
+                                 away = next_season$away[next_season$away$ROUND_NUMBER == 1, ],
+                                 fixed = fixed)
+    } else if (current_round == 2){
+      pred_same <- pred
+      list_preds_next_season[[current_round]] <- pred_same
+      next_season_train$home <- do.call(rbind, list(next_season_train$home, home_df))
+      next_season_train$away <- do.call(rbind, list(next_season_train$away, away_df))
+    }
+    else {
+      if (length(model_same) == 0){
+        cat('Model for round', current_round,
+            'has no significant features. Using historical model')
+        pred_same <- pred
+        list_preds_next_season[[current_round]] <- pred_same
+        next_season_train$home <- do.call(rbind, list(next_season_train$home, home_df))
+        next_season_train$away <- do.call(rbind, list(next_season_train$away, away_df))
+        
+      } else{
+        pred_same <- predict(model_same, se.fit = TRUE, level = 0, type = "response", newdata = tester)$fit
+        list_preds_next_season[[current_round]] <- pred_same
+        next_season_train$home <- do.call(rbind, list(next_season_train$home, home_df))
+        next_season_train$away <- do.call(rbind, list(next_season_train$away, away_df))
+      }
+      
+    }
+    
+    cat('PREDICTED ROUND', current_round,
+        "WITH ESTIMATED WINNING CHANCE", pred,
+        'AND', pred_same,"\n")
+    
+    # RETRAIN MODEL WITH THIS ROUND
+    
+    ######################################################################
+    if (subti == 1){
+      train_data$home <- subset(train_data$home, ROUND_NUMBER != current_round)
+      train_data$away <- subset(train_data$away, ROUND_NUMBER != current_round)
+    }
+    # Comment for round addition, uncomment for round substitution
+    # train_data$home <- subset(train_data$home, ROUND_NUMBER != current_round)
+    # train_data$away <- subset(train_data$away, ROUND_NUMBER != current_round)
+    ######################################################################
+    
+    train_data$home <- do.call(rbind, list(train_data$home, home_df))
+    train_data$away <- do.call(rbind, list(train_data$away, away_df))
+    model <- fit_BTM_TSTV(train_data, feats)$model
+    
+    if (current_round != 1){
+      model_same <- fit_BTM_TSTV(next_season_train, feats)$model
+    }
+    
+    current_round <- current_round + 1
+  }
+  
+  
+  # RETURN PREDICTIONS
+  cat('---------------------------------', '\n',
+      'TESTING FINISHED', '\n',
+      '---------------------------------')
+  df_for_cm$probs_og <- unlist(list_preds_next_season)
+  list_preds <- lapply(list_preds, function(x) ifelse(x > 0.5, 1, 0))
+  list_preds_same <- lapply(list_preds_next_season, function(x) ifelse(x > 0.5, 1, 0))
+  df_for_cm$preds <- unlist(list_preds)
+  df_for_cm$preds_same <- unlist(list_preds_same)
+  df_for_cm$coincide <- ifelse(df_for_cm$preds == df_for_cm$preds_same, 1, 0)
+  df_for_cm$correct <- ifelse(df_for_cm$TARGET == df_for_cm$preds, 1, 0)
+  df_for_cm$correct_same <- ifelse(df_for_cm$TARGET == df_for_cm$preds_same, 1, 0)
+  # cm <- confusionMatrix(data = factor(df_for_cm$preds, levels = c(0, 1)), 
+  #                       reference = factor(df_for_cm$TARGET, levels = c(0, 1)),
+  #                       positive = '1')
+  result <- list(df = df_for_cm
+                 # cm = cm
+                 )
+  
+  return(result)
+}
+```
+
+```{r}
+fixedpath <- "E:/TFG DATA/last_ladder_position.xlsx"
+
+homepath <- "E:/TFG DATA/TS_TV_DATA/HOME_ALL_AFL_TS_TV_2015.xlsx"
+awaypath <- "E:/TFG DATA/TS_TV_DATA/AWAY_ALL_AFL_TS_TV_2015.xlsx"
+train_data <- data_build(homepath, awaypath, fixedpath)
+resu <- fit_BTM_TSTV(train_data, feats_ALL)
+
+homepath_test <- "E:/TFG DATA/TS_TV_DATA/HOME_ALL_AFL_TS_TV_2016.xlsx"
+awaypath_test <- "E:/TFG DATA/TS_TV_DATA/AWAY_ALL_AFL_TS_TV_2016.xlsx"
+next_season <- data_build(homepath_test, awaypath_test, fixedpath)
+
+new_accuracy <- dynamic_tester_MIXED(resu$model,
+                               train_data, 
+                               next_season, 
+                               fixedpath,
+                               feats_ALL)
+```
+
+```{r}
+write.xlsx(new_accuracy$df, 
+           file = "E:/TFG DATA/RESULTS/EXPERIMENT5/ALLMIXED15_16.xlsx",
+           row.names = FALSE)
+```
+# MAJORITY VOTING
+
+The Majority Voting predictions are done through an orchestrator instead of a
+function. The predictions of different models or strategies are combined: if 3
+of them predict the HOME_WIN probability to be above 0.5, the prediction of the 
+Majority Voting is is 1. Otherwise it is 0.
+
+The cells below orchestrate the Majority Voting strategy and create a data frame
+to compare the predictions and accuracy by round number and team.
+
+```{r}
+# This is not a function, but an orchestrator
+
+###################################################################
+# Train and test contest-specific model
+###################################################################
+train_cs <- read.xlsx("E:/TFG DATA/ST_DATA/AFL_ST_2015.xlsx")
+test_cs <- read.xlsx("E:/TFG DATA/ST_DATA_TEST/AFL_ST_2016_TEST.xlsx")
+
+train_cs$HOME_TEAM <- as.factor(train_cs$HOME_TEAM)
+train_cs$AWAY_TEAM <- as.factor(train_cs$AWAY_TEAM)
+train_cs$HOME_WIN <- as.numeric(as.character(train_cs$HOME_WIN))
+train_cs$AWAY_WIN <- as.numeric(as.character(train_cs$AWAY_WIN))
+train_cs$HOME_TEAM <- data.frame(team = train_cs$HOME_TEAM,
+                                     AT_HOME = 1)
+train_cs$AWAY_TEAM <- data.frame(team = train_cs$AWAY_TEAM
+                                      , AT_HOME = 0)
+
+test_cs$HOME_TEAM <- as.factor(test_cs$HOME_TEAM)
+test_cs$AWAY_TEAM <- as.factor(test_cs$AWAY_TEAM)
+test_cs$HOME_WIN <- as.numeric(as.character(test_cs$HOME_WIN))
+test_cs$AWAY_WIN <- as.numeric(as.character(test_cs$AWAY_WIN))
+test_cs$HOME_TEAM <- data.frame(team = test_cs$HOME_TEAM,
+                                     AT_HOME = 1)
+test_cs$AWAY_TEAM <- data.frame(team = test_cs$AWAY_TEAM
+                                      , AT_HOME = 0)
+
+
+reference_w1 <- c("GEEL", "PORT", "WB",
+               "PORT", "PORT","GWS",
+               "STK","STK","ADEL",
+               "ADEL")
+
+
+model_CS <- BTm(outcome = cbind(HOME_WIN, AWAY_WIN), 
+                          player1 = HOME_TEAM, player2 = AWAY_TEAM, 
+                          formula = ~team + AT_HOME, id = "team",
+                           refcat = reference_w1[1],
+                      data = train_cs)
+
+pred_CS <- predict(model_CS, se.fit = TRUE, level = 0, 
+                      type = "response", newdata = test_cs)$fit
+
+
+###################################################################
+# Train and test complex BT FULL YEAR
+###################################################################
+
+
+homepath1 <- "E:/TFG DATA/TS_TV_DATA/HOME_L4_AFL_TS_TV_2015.xlsx"
+awaypath1 <- "E:/TFG DATA/TS_TV_DATA/AWAY_L4_AFL_TS_TV_2015.xlsx"
+homepath2 <- "E:/TFG DATA/TS_TV_DATA/HOME_L4_AFL_TS_TV_2016.xlsx"
+awaypath2 <- "E:/TFG DATA/TS_TV_DATA/AWAY_L4_AFL_TS_TV_2016.xlsx"
+fixedpath <- "E:/TFG DATA/last_ladder_position.xlsx"
+train_TVTS <- data_build(homepath1, awaypath1, fixedpath)
+test_TVCS <- data_build(homepath2, awaypath2, fixedpath)
+
+model_TV_TS <- fit_BTM_TSTV(train_TVTS, feats_L4)$model
+pred_TVTS_full_season <- predict(model_TV_TS, se.fit = TRUE, level = 0, 
+                      type = "response", newdata = test_TVCS)$fit
+
+################################
+# ADDITION
+
+preds_addition <- dynamic_tester_ROUND(model_TV_TS,train_TVTS, test_TVCS,
+                                  fixedpath, feats_L4, subti = 0)$df$probs_og
+# SUBTITUTION
+preds_substitution <- dynamic_tester_ROUND(model_TV_TS,train_TVTS, test_TVCS,
+                                  fixedpath, feats_L4, subti = 1)$df$probs_og
+
+# INCREMENTAL
+preds_incremental <- dynamic_tester_MIXED(model_TV_TS,train_TVTS, test_TVCS,
+                                  fixedpath, feats_L4, subti = 0)$df$probs_og
+
+
+```
+
+```{r}
+MV_df <-data.frame(ROUND_NUMBER = test_TVCS$home$ROUND_NUMBER,
+                   HOME_TEAM = test_TVCS$home$TEAM,
+                   AWAY_TEAM = test_TVCS$away$TEAM,
+                    TARGET = test_cs$HOME_WIN,
+                   CS_PREDICTION = pred_CS,
+                   TV_TS_PREDICTION = pred_TVTS_full_season,
+                   ADDITION_PREDICTION = preds_addition,
+                   SUBSTITUTION_PREDICTION = preds_substitution,
+                   INCREMENTAL_PREDICTION = preds_incremental)
+
+MV_df$MAJORITY_VOTE <- ifelse(rowSums(MV_df[,
+                            c("CS_PREDICTION", "TV_TS_PREDICTION",
+                              "ADDITION_PREDICTION", "SUBSTITUTION_PREDICTION", 
+                              "INCREMENTAL_PREDICTION")
+                            ] > 0.5) >= 3, 1, 0)
+
+MV_df$CS_correct <- ifelse(MV_df$TARGET == ifelse(MV_df$CS_PREDICTION > 0.5, 1, 0), 1, 0)
+MV_df$TVTS_correct <- ifelse(MV_df$TARGET == ifelse(MV_df$TV_TS_PREDICTION > 0.5, 1, 0), 1, 0)
+MV_df$ADD_correct <- ifelse(MV_df$TARGET == ifelse(MV_df$ADDITION_PREDICTION > 0.5, 1, 0), 1, 0)
+MV_df$SUBS_correct <- ifelse(MV_df$TARGET == ifelse(MV_df$SUBSTITUTION_PREDICTION > 0.5, 1, 0), 1, 0)
+MV_df$INCR_correct <- ifelse(MV_df$TARGET == ifelse(MV_df$INCREMENTAL_PREDICTION > 0.5, 1, 0), 1, 0)
+MV_df$MV_correct <- ifelse(MV_df$TARGET == MV_df$MAJORITY_VOTE, 1, 0)
+
+MV_df$num_VOTED_YES <- rowSums(MV_df[,
+                            c("CS_PREDICTION", "TV_TS_PREDICTION",
+                              "ADDITION_PREDICTION", "SUBSTITUTION_PREDICTION", 
+                              "INCREMENTAL_PREDICTION")
+                            ] > 0.5)
+
+CONF_MATRIX <- confusionMatrix(data = factor(MV_df$MAJORITY_VOTE,levels = c(0, 1)), 
+                               reference = factor(MV_df$TARGET,levels = c(0, 1)),
+                               positive = '1')
+CONF_MATRIX
+```
+
+```{r}
+
+write.xlsx(MV_df, 
+           file = "E:/TFG DATA/RESULTS/EXPERIMENT5/MV15_16.xlsx",
+           row.names = FALSE)
+```
+
