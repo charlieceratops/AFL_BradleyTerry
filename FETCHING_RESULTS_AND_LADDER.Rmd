@@ -10,7 +10,7 @@ knitr::opts_chunk$set(echo = TRUE)
 # DISCLAIMER
 
 This code was made by Carlos Rafael Gonzalez Soffner for the Final Thesis 
-presented to the Bachelor of Data and Business Analytics. Anyone is welcomed to
+presented to the Bachelor of Data and Business Analytics. Anyone is welcome to
 use this file or any part of it for their projects as long as they reference
 this thesis, code or author.
 
